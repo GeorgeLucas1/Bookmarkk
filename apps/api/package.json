@@ -1,8 +1,8 @@
 {
-  "name": "@ai-document-assistant/api",
+  "name": "bookmark/api",
   "version": "1.0.0",
   "private": true,
-  "description": "NestJS API: PDF ingestion, local embeddings, pgvector similarity search, and streaming RAG chat.",
+  "description": "analise de contexto de anotaçoes de historias em api",
   "scripts": {
     "build": "nest build",
     "start": "node dist/main.js",

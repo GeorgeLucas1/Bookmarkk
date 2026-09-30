@@ -4,7 +4,7 @@ import { ChatService } from './chat.service';
 import { ChatHistoryMessage } from './prompt';
 
 interface ChatRequestBody {
-  documentId?: string;
+  noteId?: string;
   message?: string;
   history?: ChatHistoryMessage[];
 }
@@ -22,9 +22,9 @@ export class ChatController {
    */
   @Post()
   async chat(@Body() body: ChatRequestBody, @Res() res: Response): Promise<void> {
-    const { documentId, message } = body;
-    if (!documentId || typeof documentId !== 'string') {
-      throw new BadRequestException('documentId is required');
+    const { noteId, message } = body;
+    if (!noteId || typeof noteId !== 'string') {
+      throw new BadRequestException('noteId is required');
     }
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       throw new BadRequestException('message is required');
@@ -32,7 +32,7 @@ export class ChatController {
     const history = Array.isArray(body.history) ? body.history : [];
 
     // Errors thrown before the stream starts become regular JSON errors.
-    const stream = await this.chatService.ask(documentId, message.trim(), history).catch((error) => {
+    const stream = await this.chatService.ask(noteId, message.trim(), history).catch((error) => {
       if (error instanceof HttpException) {
         throw error;
       }

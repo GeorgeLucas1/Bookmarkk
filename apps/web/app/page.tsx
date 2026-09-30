@@ -2,20 +2,24 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChatMessage, ChatPanel } from '../components/ChatPanel';
-import { DocumentPanel } from '../components/DocumentPanel';
+import { NoteDialog } from '../components/NoteDialog';
+import { NotePanel } from '../components/NotePanel';
 import { Toast, ToastMessage } from '../components/Toast';
 import {
-  deleteDocument,
-  DocumentRecord,
-  listDocuments,
+  addNoteEntry,
+  createNote,
+  deleteNote,
+  listNotes,
+  NewNote,
+  NoteRecord,
   streamChat,
-  uploadDocument,
 } from '../lib/api';
 
 export default function HomePage() {
-  const [documents, setDocuments] = useState<DocumentRecord[]>([]);
-  const [loadingDocuments, setLoadingDocuments] = useState(true);
-  const [uploading, setUploading] = useState(false);
+  const [notes, setNotes] = useState<NoteRecord[]>([]);
+  const [loadingNotes, setLoadingNotes] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [dialog, setDialog] = useState<'create' | 'entry' | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatBusy, setChatBusy] = useState(false);
@@ -27,51 +31,64 @@ export default function HomePage() {
     setToast({ id: toastId.current, text });
   }, []);
 
-  const refreshDocuments = useCallback(async () => {
+  const refreshNotes = useCallback(async () => {
     try {
-      const docs = await listDocuments();
-      setDocuments(docs);
+      setNotes(await listNotes());
     } catch (error) {
       showError((error as Error).message);
     } finally {
-      setLoadingDocuments(false);
+      setLoadingNotes(false);
     }
   }, [showError]);
 
   useEffect(() => {
-    void refreshDocuments();
-  }, [refreshDocuments]);
+    void refreshNotes();
+  }, [refreshNotes]);
 
-  const handleUpload = useCallback(
-    async (file: File) => {
-      if (file.type !== 'application/pdf') {
-        showError('Only PDF files are accepted.');
-        return;
-      }
-      if (file.size > 10 * 1024 * 1024) {
-        showError('The file exceeds the 10 MB limit.');
-        return;
-      }
-      setUploading(true);
+  const handleSave = useCallback(
+    async (input: NewNote): Promise<boolean> => {
+      setSaving(true);
       try {
-        const doc = await uploadDocument(file);
-        setDocuments((prev) => [doc, ...prev]);
-        setSelectedId(doc.id);
+        const note = await createNote(input);
+        setNotes((prev) => [note, ...prev]);
+        setSelectedId(note.id);
         setMessages([]);
+        return true;
       } catch (error) {
         showError((error as Error).message);
+        return false;
       } finally {
-        setUploading(false);
+        setSaving(false);
       }
     },
     [showError],
   );
 
+  const handleAddEntry = useCallback(
+    async (content: string): Promise<boolean> => {
+      if (!selectedId) return false;
+      setSaving(true);
+      try {
+        const updated = await addNoteEntry(selectedId, content);
+        setNotes((prev) => prev.map((note) => (note.id === updated.id ? updated : note)));
+        return true;
+      } catch (error) {
+        showError((error as Error).message);
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [selectedId, showError],
+  );
+
+  const closeDialog = useCallback(() => setDialog(null), []);
+
   const handleDelete = useCallback(
     async (id: string) => {
       try {
-        await deleteDocument(id);
-        setDocuments((prev) => prev.filter((doc) => doc.id !== id));
+        await deleteNote(id);
+        setNotes((prev) => prev.filter((note) => note.id !== id));
         if (selectedId === id) {
           setSelectedId(null);
           setMessages([]);
@@ -134,23 +151,45 @@ export default function HomePage() {
     [messages, selectedId, showError],
   );
 
+  const selectedNote = notes.find((note) => note.id === selectedId) ?? null;
+
   return (
     <main className="flex h-dvh flex-col overflow-hidden md:flex-row">
-      <DocumentPanel
-        documents={documents}
-        loading={loadingDocuments}
-        uploading={uploading}
+      <NotePanel
+        notes={notes}
+        loading={loadingNotes}
         selectedId={selectedId}
         onSelect={handleSelect}
-        onUpload={handleUpload}
+        onNew={() => setDialog('create')}
         onDelete={handleDelete}
       />
       <ChatPanel
-        documentSelected={selectedId !== null}
+        note={selectedNote}
+        onAddEntry={() => setDialog('entry')}
         messages={messages}
         busy={chatBusy}
         onSend={handleSend}
       />
+      {dialog === 'create' && (
+        <NoteDialog
+          mode="create"
+          saving={saving}
+          onClose={closeDialog}
+          onSubmit={handleSave}
+          onError={showError}
+        />
+      )}
+      {dialog === 'entry' && selectedNote && (
+        <NoteDialog
+          mode="entry"
+          noteTitle={selectedNote.title}
+          noteType={selectedNote.type}
+          saving={saving}
+          onClose={closeDialog}
+          onSubmit={handleAddEntry}
+          onError={showError}
+        />
+      )}
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </main>
   );

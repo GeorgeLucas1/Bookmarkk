@@ -1,8 +1,14 @@
+import { NOTE_TYPE_LABELS, NoteType } from '../notes/note-types';
+
 export interface RetrievedChunk {
   id: string;
   content: string;
-  page: number;
   similarity: number;
+}
+
+export interface NoteContext {
+  title: string;
+  type: NoteType;
 }
 
 export interface ChatHistoryMessage {
@@ -20,30 +26,32 @@ const MAX_HISTORY_MESSAGES = 10;
 /**
  * Builds the message list for the RAG chat completion.
  *
- * The system message carries the retrieved document excerpts, numbered and
- * labeled with their page, and instructs the model to answer only from
- * that context and to cite pages.
+ * The system message carries the note title and type plus the retrieved
+ * excerpts, numbered, and instructs the model to answer only from that
+ * context.
  */
 export function buildRagMessages(
   question: string,
+  note: NoteContext,
   chunks: RetrievedChunk[],
   history: ChatHistoryMessage[] = [],
 ): ChatCompletionMessage[] {
   const context =
     chunks.length > 0
-      ? chunks
-          .map((chunk, index) => `[Excerpt ${index + 1} | page ${chunk.page}]\n${chunk.content}`)
-          .join('\n\n')
-      : 'No relevant excerpts were found in the document.';
+      ? chunks.map((chunk, index) => `[Excerpt ${index + 1}]\n${chunk.content}`).join('\n\n')
+      : 'No relevant excerpts were found in the note.';
 
   const system = [
-    'You are a document assistant. Answer the user question using only the document excerpts below.',
+    'You are a note assistant. Answer the user question using only the note excerpts below.',
     'Rules:',
     '- If the excerpts do not contain the answer, say so clearly instead of guessing.',
-    '- Cite the page numbers you used, in the form (page N).',
+    '- Answer in the same language as the user question.',
     '- Be concise and factual.',
     '',
-    'Document excerpts:',
+    `Note title: ${note.title}`,
+    `Note type: ${NOTE_TYPE_LABELS[note.type] ?? note.type}`,
+    '',
+    'Note excerpts:',
     context,
   ].join('\n');
 

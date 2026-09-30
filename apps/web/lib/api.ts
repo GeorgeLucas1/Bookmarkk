@@ -1,16 +1,40 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 
-export interface DocumentRecord {
+export const NOTE_TYPES = [
+  'game_story',
+  'study',
+  'book',
+  'movie_series',
+  'work',
+  'personal',
+  'other',
+] as const;
+
+export type NoteType = (typeof NOTE_TYPES)[number];
+
+export interface NoteEntry {
   id: string;
-  filename: string;
-  pages: number;
-  chunks: number;
+  content: string;
   createdAt: string;
+}
+
+export interface NoteRecord {
+  id: string;
+  title: string;
+  type: NoteType;
+  content: string;
+  entries: NoteEntry[];
+  createdAt: string;
+}
+
+export interface NewNote {
+  title: string;
+  type: NoteType;
+  content: string;
 }
 
 export interface ChatSource {
   id: string;
-  page: number;
   content: string;
   similarity: number;
 }
@@ -32,22 +56,34 @@ async function parseError(response: Response): Promise<string> {
   return `Request failed with status ${response.status}`;
 }
 
-export async function listDocuments(): Promise<DocumentRecord[]> {
-  const response = await fetch(`${API_URL}/documents`);
+export async function listNotes(): Promise<NoteRecord[]> {
+  const response = await fetch(`${API_URL}/notes`);
   if (!response.ok) throw new Error(await parseError(response));
   return response.json();
 }
 
-export async function uploadDocument(file: File): Promise<DocumentRecord> {
-  const form = new FormData();
-  form.append('file', file);
-  const response = await fetch(`${API_URL}/documents`, { method: 'POST', body: form });
+export async function createNote(note: NewNote): Promise<NoteRecord> {
+  const response = await fetch(`${API_URL}/notes`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(note),
+  });
   if (!response.ok) throw new Error(await parseError(response));
   return response.json();
 }
 
-export async function deleteDocument(id: string): Promise<void> {
-  const response = await fetch(`${API_URL}/documents/${id}`, { method: 'DELETE' });
+export async function addNoteEntry(id: string, content: string): Promise<NoteRecord> {
+  const response = await fetch(`${API_URL}/notes/${id}/entries`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+  if (!response.ok) throw new Error(await parseError(response));
+  return response.json();
+}
+
+export async function deleteNote(id: string): Promise<void> {
+  const response = await fetch(`${API_URL}/notes/${id}`, { method: 'DELETE' });
   if (!response.ok) throw new Error(await parseError(response));
 }
 
@@ -65,7 +101,7 @@ export interface ChatStreamHandlers {
  * final "done" event. Server-side failures mid-stream arrive as "error".
  */
 export async function streamChat(
-  documentId: string,
+  noteId: string,
   message: string,
   history: ChatHistoryMessage[],
   handlers: ChatStreamHandlers,
@@ -73,7 +109,7 @@ export async function streamChat(
   const response = await fetch(`${API_URL}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ documentId, message, history }),
+    body: JSON.stringify({ noteId, message, history }),
   });
 
   if (!response.ok || !response.body) {

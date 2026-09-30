@@ -2,7 +2,6 @@ import {
   Inject,
   Injectable,
   Logger,
-  NotFoundException,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -10,6 +9,7 @@ import { ConfigService } from '@nestjs/config';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database/database.module';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
+import { NotesService } from '../notes/notes.service';
 import { toSqlVector } from '../shared/vector';
 import { buildRagMessages, ChatCompletionMessage, ChatHistoryMessage, RetrievedChunk } from './prompt';
 
@@ -19,7 +19,6 @@ const TOP_K = 5;
 
 export interface ChatSource {
   id: string;
-  page: number;
   content: string;
   similarity: number;
 }
@@ -36,6 +35,7 @@ export class ChatService {
   constructor(
     @Inject(PG_POOL) private readonly pool: Pool,
     private readonly embeddings: EmbeddingsService,
+    private readonly notes: NotesService,
     private readonly config: ConfigService,
   ) {}
 
@@ -43,7 +43,7 @@ export class ChatService {
    * Runs the full RAG flow: embed the question, retrieve the most similar
    * chunks with pgvector, build the prompt, and stream the completion.
    */
-  async ask(documentId: string, message: string, history: ChatHistoryMessage[]): Promise<ChatStream> {
+  async ask(noteId: string, message: string, history: ChatHistoryMessage[]): Promise<ChatStream> {
     const apiKey = this.config.get<string>('OPENROUTER_API_KEY');
     if (!apiKey) {
       throw new ServiceUnavailableException(
@@ -51,16 +51,15 @@ export class ChatService {
       );
     }
 
-    await this.assertDocumentExists(documentId);
+    const note = await this.notes.findOne(noteId);
 
-    const chunks = await this.retrieveChunks(documentId, message);
-    const messages = buildRagMessages(message, chunks, history);
+    const chunks = await this.retrieveChunks(noteId, message);
+    const messages = buildRagMessages(message, note, chunks, history);
     const tokens = this.streamCompletion(apiKey, messages);
 
     return {
       sources: chunks.map((chunk) => ({
         id: chunk.id,
-        page: chunk.page,
         content: chunk.content,
         similarity: chunk.similarity,
       })),
@@ -68,27 +67,19 @@ export class ChatService {
     };
   }
 
-  private async assertDocumentExists(documentId: string): Promise<void> {
-    const result = await this.pool.query('SELECT 1 FROM documents WHERE id = $1', [documentId]);
-    if (result.rowCount === 0) {
-      throw new NotFoundException(`Document ${documentId} was not found`);
-    }
-  }
-
-  private async retrieveChunks(documentId: string, question: string): Promise<RetrievedChunk[]> {
+  private async retrieveChunks(noteId: string, question: string): Promise<RetrievedChunk[]> {
     const questionVector = await this.embeddings.embedOne(question);
     const result = await this.pool.query<{
       id: string;
       content: string;
-      page: number;
       similarity: number;
     }>(
-      `SELECT id, content, page, 1 - (embedding <=> $1::vector) AS similarity
-       FROM chunks
-       WHERE document_id = $2
+      `SELECT id, content, 1 - (embedding <=> $1::vector) AS similarity
+       FROM note_chunks
+       WHERE note_id = $2
        ORDER BY embedding <=> $1::vector
        LIMIT $3`,
-      [toSqlVector(questionVector), documentId, TOP_K],
+      [toSqlVector(questionVector), noteId, TOP_K],
     );
     return result.rows.map((row) => ({ ...row, similarity: Number(row.similarity) }));
   }
