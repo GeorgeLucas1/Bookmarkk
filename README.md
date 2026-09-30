@@ -108,7 +108,7 @@ Tarefas como extração de entidades e análise da nota pedem ao modelo uma resp
 
 ---
 
-## MVPs do Produto
+## ideias do projeto
 
 O desenvolvimento é dividido em três entregas, começando pelo núcleo (anotar, buscar e organizar) e só depois partindo para a análise e as ferramentas de estudo.
 
