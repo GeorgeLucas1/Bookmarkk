@@ -136,3 +136,97 @@ O desenvolvimento é dividido em três entregas, começando pelo núcleo (anotar
 * Exportação da wiki em Markdown.
 
 ---
+
+## Como rodar
+
+O projeto é um monorepo com **npm workspaces**: o `package.json` da raiz enxerga as pastas `apps/api` (NestJS) e `apps/web` (Next.js) como pacotes do mesmo repositório. Por isso os comandos abaixo devem ser executados **na raiz do projeto**, e não dentro de `apps/api` ou `apps/web`.
+
+### Pré-requisitos
+* Node.js e npm
+* Docker (para o PostgreSQL com pgvector)
+
+### Passo a passo
+
+```bash
+npm install       # instala as dependências da raiz e das duas aplicações
+npm run dev:all   # sobe o Postgres no Docker, a API e o front de uma vez
+```
+
+Se o Postgres já estiver rodando, basta `npm run dev`.
+
+### Scripts disponíveis (raiz)
+
+| Script | O que faz |
+| :--- | :--- |
+| `npm run dev` | Inicia a API e o front ao mesmo tempo, no mesmo terminal |
+| `npm run dev:all` | Executa `db:up` e, em seguida, `dev` |
+| `npm run db:up` | Sobe o container do PostgreSQL em segundo plano (`docker compose up -d postgres`) |
+| `npm run dev:api` | Inicia só a API (`nest start --watch` em `apps/api`) |
+| `npm run dev:web` | Inicia só o front (`next dev` em `apps/web`) |
+| `npm run build` | Gera o build das duas aplicações |
+| `npm test` | Roda os testes da API |
+
+### Como o `npm run dev` funciona
+
+O script usa o pacote [`concurrently`](https://www.npmjs.com/package/concurrently), instalado como dependência de desenvolvimento na raiz:
+
+```json
+"dev": "concurrently -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\""
+```
+
+* `"npm:dev:api"` e `"npm:dev:web"` são atalhos do concurrently para `npm run dev:api` e `npm run dev:web`. Cada um usa `--workspace` para rodar o script dentro da aplicação certa.
+* Os dois processos rodam em paralelo no mesmo terminal.
+* `-n api,web` e `-c blue,magenta` dão um nome e uma cor a cada processo, e cada linha do log aparece com o prefixo `[api]` ou `[web]`.
+* Se um dos servidores cair (por exemplo, a API sem conexão com o banco), o outro continua rodando.
+* Um único `Ctrl+C` encerra os dois.
+
+### Como o comando chega em cada pasta
+
+Quem aponta para as pastas não é o `concurrently`, e sim o **npm workspaces**. São três etapas encadeadas.
+
+**1. A raiz declara as pastas.** No `package.json` da raiz:
+
+```json
+"workspaces": ["apps/*"]
+```
+
+Isso diz ao npm que cada pasta dentro de `apps/` é um projeto próprio, com seu próprio `package.json`: `apps/api` e `apps/web`.
+
+**2. Os scripts da raiz usam `--workspace`.**
+
+```json
+"dev:api": "npm run start:dev --workspace=apps/api",
+"dev:web": "npm run dev --workspace=apps/web"
+```
+
+O `--workspace=apps/api` faz o npm entrar na pasta `apps/api` e rodar o script `start:dev` do `package.json` **de lá**. O mesmo vale para `apps/web`:
+
+```json
+// apps/api/package.json
+"start:dev": "nest start --watch"     // inicia o NestJS
+
+// apps/web/package.json
+"dev": "next dev"                     // inicia o Next.js
+```
+
+**3. O `concurrently` só chama os dois ao mesmo tempo.** Ele não conhece pastas nem frameworks: apenas executa `npm run dev:api` e `npm run dev:web` em paralelo.
+
+**O caminho completo:**
+
+```
+npm run dev                       (raiz)
+ └─ concurrently
+     ├─ npm run dev:api           (raiz)
+     │   └─ --workspace=apps/api  → entra em apps/api
+     │       └─ start:dev         → nest start --watch   [api]
+     │
+     └─ npm run dev:web           (raiz)
+         └─ --workspace=apps/web  → entra em apps/web
+             └─ dev               → next dev             [web]
+```
+
+Na prática, é o mesmo que abrir dois terminais e rodar `cd apps/api` + `npm run start:dev` em um e `cd apps/web` + `npm run dev` no outro. O `--workspace` substitui o `cd`, e o `concurrently` substitui os dois terminais.
+
+Por padrão, o front fica em `http://localhost:3001` e a API se conecta ao PostgreSQL na porta `5432`.
+
+> **Dica:** dentro de `apps/api` o script de desenvolvimento se chama `start:dev`, e não `dev`. Para iniciar só a API a partir dessa pasta, use `npm run start:dev`.
