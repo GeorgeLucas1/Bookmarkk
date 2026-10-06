@@ -113,7 +113,7 @@ Tarefas como extração de entidades e análise da nota pedem ao modelo uma resp
 O desenvolvimento é dividido em três entregas, começando pelo núcleo (anotar, buscar e organizar) e só depois partindo para a análise e as ferramentas de estudo.
 
 ### MVP 1 — Caderno, Busca e Wiki
-* Autenticação e perfil do usuário.
+
 * Projetos com título, tipo, contexto e progresso atual.
 * Anotações com marcador de progresso e nível de confiança.
 * Embeddings, busca híbrida e perguntas respondidas com citação.

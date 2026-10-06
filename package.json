@@ -1,8 +1,8 @@
 {
-  "name": "ai-document-assistant",
+  "name": "bookmark",
   "version": "1.0.0",
   "private": true,
-  "description": "RAG-based document assistant: upload PDFs, index them with local embeddings, and chat about their content with streamed answers and source citations.",
+  "description": "A simple bookmarking application- voltado á analise de anotaçoes .",
   "workspaces": [
     "apps/*"
   ],
@@ -10,6 +10,8 @@
     "dev": "concurrently -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
     "dev:all": "npm run db:up && npm run dev",
     "db:up": "docker compose up -d postgres",
+    "db:up:wsl": "wsl -d Ubuntu -- docker compose up -d postgres",
+    "dev:wsl": "npm run db:up:wsl && npm run dev",
     "build": "npm run build --workspaces",
     "test": "npm run test --workspace=apps/api",
     "dev:api": "npm run start:dev --workspace=apps/api",

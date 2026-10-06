@@ -7,7 +7,11 @@ import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: ['.env', '../../.env'] }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ['.env', '../../.env'],
+      expandVariables: true,
+    }),
     DatabaseModule,
     EmbeddingsModule,
     NotesModule,
