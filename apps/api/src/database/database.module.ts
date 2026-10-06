@@ -14,7 +14,7 @@ export const PG_POOL = 'PG_POOL';
       useFactory: (config: ConfigService): Pool => {
         const connectionString = config.get<string>(
           'DATABASE_URL',
-          'postgres://postgres:postgres@localhost:5432/ai_documents',
+          'postgres://postgres:postgres@localhost:5432/bookmark',
         );
         return new Pool({ connectionString });
       },
