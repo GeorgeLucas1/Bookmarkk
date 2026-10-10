@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 
 /**
  * Minimal shape of the feature-extraction pipeline returned by
@@ -19,9 +19,19 @@ const MODEL_ID = 'Xenova/all-MiniLM-L6-v2';
  * on disk, so no external embedding API is required.
  */
 @Injectable()
-export class EmbeddingsService {
+export class EmbeddingsService implements OnApplicationBootstrap {
   private readonly logger = new Logger(EmbeddingsService.name);
   private pipelinePromise?: Promise<FeatureExtractionPipeline>;
+
+  /**
+   * Starts loading the model as soon as the API is up, without blocking
+   * startup, so the first note saved does not pay the ~3s load time.
+   */
+  onApplicationBootstrap(): void {
+    this.loadPipeline().catch((error) =>
+      this.logger.error(`Failed to preload embedding model: ${error}`),
+    );
+  }
 
   private loadPipeline(): Promise<FeatureExtractionPipeline> {
     if (!this.pipelinePromise) {
@@ -36,6 +46,10 @@ export class EmbeddingsService {
       this.pipelinePromise = importEsm('@xenova/transformers').then((transformers) =>
         transformers.pipeline('feature-extraction', MODEL_ID),
       );
+      // A failed load (e.g. no network on the first download) is retried on the next call.
+      this.pipelinePromise.catch(() => {
+        this.pipelinePromise = undefined;
+      });
     }
     return this.pipelinePromise;
   }

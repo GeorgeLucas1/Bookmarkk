@@ -77,3 +77,18 @@ describe('buildRagMessages', () => {
     expect(messages.some((m) => m.content === 'legitimate question')).toBe(true);
   });
 });
+
+describe('buildRagMessages memories', () => {
+  const note: NoteContext = { title: 'Hollow Knight', type: 'game_story' };
+
+  it('adds earlier memories after the excerpts', () => {
+    const [system] = buildRagMessages('q', note, [], [], ['The user suspects the Pale King lied.']);
+    expect(system.content).toContain('Memories of earlier conversations');
+    expect(system.content).toContain('- The user suspects the Pale King lied.');
+  });
+
+  it('omits the memory section when there are none', () => {
+    const [system] = buildRagMessages('q', note, []);
+    expect(system.content).not.toContain('Memories of earlier conversations');
+  });
+});
