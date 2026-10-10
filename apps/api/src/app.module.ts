@@ -4,6 +4,7 @@ import { DatabaseModule } from './database/database.module';
 import { EmbeddingsModule } from './embeddings/embeddings.module';
 import { NotesModule } from './notes/notes.module';
 import { ChatModule } from './chat/chat.module';
+import { MemoryModule } from './memory/memory.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { ChatModule } from './chat/chat.module';
     EmbeddingsModule,
     NotesModule,
     ChatModule,
+    MemoryModule,
   ],
 })
 export class AppModule {}

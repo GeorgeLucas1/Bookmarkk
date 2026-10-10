@@ -7,6 +7,7 @@ interface ChatRequestBody {
   noteId?: string;
   message?: string;
   history?: ChatHistoryMessage[];
+  conversationId?: string;
 }
 
 @Controller('chat')
@@ -16,7 +17,8 @@ export class ChatController {
   /**
    * Streams the assistant answer over Server-Sent Events.
    *
-   * Event sequence: one "sources" event with the retrieved chunks, then a
+   * Event sequence: one "conversation" event with the id to send back on the
+   * next message, one "sources" event with the retrieved chunks, then a
    * series of "token" events, then a final "done" event. Errors after the
    * stream has started are delivered as an "error" event.
    */
@@ -30,9 +32,10 @@ export class ChatController {
       throw new BadRequestException('message is required');
     }
     const history = Array.isArray(body.history) ? body.history : [];
+    const conversationId = typeof body.conversationId === 'string' ? body.conversationId : undefined;
 
     // Errors thrown before the stream starts become regular JSON errors.
-    const stream = await this.chatService.ask(noteId, message.trim(), history).catch((error) => {
+    const stream = await this.chatService.ask(noteId, message.trim(), history, conversationId).catch((error) => {
       if (error instanceof HttpException) {
         throw error;
       }
@@ -45,6 +48,7 @@ export class ChatController {
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
 
+    this.writeEvent(res, 'conversation', { id: stream.conversationId });
     this.writeEvent(res, 'sources', stream.sources);
 
     try {
