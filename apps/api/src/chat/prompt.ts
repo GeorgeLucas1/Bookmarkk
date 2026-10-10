@@ -1,4 +1,7 @@
+import type { ChatCompletionMessage } from '../llm/openrouter.service';
 import { NOTE_TYPE_LABELS, NoteType } from '../notes/note-types';
+
+export type { ChatCompletionMessage };
 
 export interface RetrievedChunk {
   id: string;
@@ -16,11 +19,6 @@ export interface ChatHistoryMessage {
   content: string;
 }
 
-export interface ChatCompletionMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
-}
-
 const MAX_HISTORY_MESSAGES = 10;
 
 /**
@@ -28,13 +26,15 @@ const MAX_HISTORY_MESSAGES = 10;
  *
  * The system message carries the note title and type plus the retrieved
  * excerpts, numbered, and instructs the model to answer only from that
- * context.
+ * context. Memories of earlier conversations about the note, when given,
+ * follow the excerpts as secondary context.
  */
 export function buildRagMessages(
   question: string,
   note: NoteContext,
   chunks: RetrievedChunk[],
   history: ChatHistoryMessage[] = [],
+  memories: string[] = [],
 ): ChatCompletionMessage[] {
   const context =
     chunks.length > 0
@@ -53,6 +53,13 @@ export function buildRagMessages(
     '',
     'Note excerpts:',
     context,
+    ...(memories.length > 0
+      ? [
+          '',
+          'Memories of earlier conversations with this user about the note (may be outdated; the excerpts win when they disagree):',
+          ...memories.map((memory) => `- ${memory}`),
+        ]
+      : []),
   ].join('\n');
 
   const trimmedHistory = history
