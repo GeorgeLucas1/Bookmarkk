@@ -26,6 +26,14 @@ export default function HomePage() {
   const [chatBusy, setChatBusy] = useState(false);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const toastId = useRef(0);
+  // Conversation the API is saving this chat to; it builds the AI memory from it.
+  const conversationId = useRef<string | null>(null);
+
+  /** Clears the chat; the next message starts a new conversation (and a new memory). */
+  const resetChat = useCallback(() => {
+    setMessages([]);
+    conversationId.current = null;
+  }, []);
 
   const showError = useCallback((text: string) => {
     toastId.current += 1;
@@ -53,7 +61,7 @@ export default function HomePage() {
         const note = await createNote(input);
         setNotes((prev) => [note, ...prev]);
         setSelectedId(note.id);
-        setMessages([]);
+        resetChat();
         return true;
       } catch (error) {
         showError((error as Error).message);
@@ -62,7 +70,7 @@ export default function HomePage() {
         setSaving(false);
       }
     },
-    [showError],
+    [resetChat, showError],
   );
 
   const handleAddEntry = useCallback(
@@ -92,22 +100,22 @@ export default function HomePage() {
         setNotes((prev) => prev.filter((note) => note.id !== id));
         if (selectedId === id) {
           setSelectedId(null);
-          setMessages([]);
+          resetChat();
         }
       } catch (error) {
         showError((error as Error).message);
       }
     },
-    [selectedId, showError],
+    [resetChat, selectedId, showError],
   );
 
   const handleSelect = useCallback(
     (id: string) => {
       if (id === selectedId) return;
       setSelectedId(id);
-      setMessages([]);
+      resetChat();
     },
-    [selectedId],
+    [resetChat, selectedId],
   );
 
   const handleSend = useCallback(
@@ -133,7 +141,10 @@ export default function HomePage() {
       };
 
       try {
-        await streamChat(selectedId, text, history, {
+        await streamChat(selectedId, text, history, conversationId.current, {
+          onConversation: (id) => {
+            conversationId.current = id;
+          },
           onSources: (sources) => updateAssistant((m) => ({ ...m, sources })),
           onToken: (token) => updateAssistant((m) => ({ ...m, content: m.content + token })),
           onDone: () => updateAssistant((m) => ({ ...m, streaming: false })),
@@ -192,7 +203,7 @@ export default function HomePage() {
           onError={showError}
         />
       )}
-      {dialog === 'memory' && <MemoryDialog onClose={closeDialog} />}
+      {dialog === 'memory' && <MemoryDialog note={selectedNote} onClose={closeDialog} />}
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </main>
   );

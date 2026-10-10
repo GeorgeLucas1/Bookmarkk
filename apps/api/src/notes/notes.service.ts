@@ -37,6 +37,11 @@ const WITH_ENTRIES = {
   },
 } as const;
 
+interface EmbeddedChunk {
+  content: string;
+  embedding: number[];
+}
+
 /** O banco ou uma transação aberta; os dois aceitam os mesmos inserts. */
 type Executor = Pick<Database, 'insert'>;
 
@@ -51,12 +56,13 @@ export class NotesService {
 
   /** Salva uma nota e indexa o texto dela em chunks com embeddings para a busca do chat. */
   async create(input: CreateNoteInput): Promise<NoteRecord> {
+    const chunks = await this.embedText(input.title, input.content);
     const noteId = await this.db.transaction(async (tx) => {
       const [note] = await tx
         .insert(notes)
         .values({ title: input.title, type: input.type, content: input.content })
         .returning({ id: notes.id });
-      await this.indexText(tx, note.id, input.title, input.content);
+      await this.saveChunks(tx, note.id, chunks);
       return note.id;
     });
     return this.findOne(noteId);
@@ -65,10 +71,11 @@ export class NotesService {
   /** Adiciona uma nova anotação a uma nota existente e a indexa. */
   async addEntry(noteId: string, content: string): Promise<NoteRecord> {
     const note = await this.findOne(noteId);
+    const chunks = await this.embedText(note.title, content);
 
     await this.db.transaction(async (tx) => {
       await tx.insert(noteEntries).values({ noteId, content });
-      await this.indexText(tx, noteId, note.title, content);
+      await this.saveChunks(tx, noteId, chunks);
     });
     return this.findOne(noteId);
   }
@@ -98,18 +105,23 @@ export class NotesService {
     }
   }
 
-  /** Divide o texto em chunks, gera os embeddings e salva os chunks na nota. */
-  private async indexText(executor: Executor, noteId: string, title: string, text: string) {
+  /**
+   * Divide o texto em chunks e gera os embeddings. Roda fora da transação para
+   * não segurar uma conexão do banco enquanto o modelo calcula os vetores.
+   */
+  private async embedText(title: string, text: string): Promise<EmbeddedChunk[]> {
     // O título entra junto com o corpo para que perguntas que o mencionam também encontrem o trecho.
     const chunks = chunkPages([`${title}\n${text}`]);
     this.logger.log(`Embedding ${chunks.length} chunks for note "${title}"`);
+    const vectors = await this.embeddings.embed(chunks.map((chunk) => chunk.content));
+    return chunks.map((chunk, i) => ({ content: chunk.content, embedding: vectors[i] }));
+  }
+
+  /** Salva os chunks já com embeddings na nota. */
+  private async saveChunks(executor: Executor, noteId: string, chunks: EmbeddedChunk[]) {
     if (chunks.length === 0) {
       return;
     }
-    const vectors = await this.embeddings.embed(chunks.map((chunk) => chunk.content));
-
-    await executor.insert(noteChunks).values(
-      chunks.map((chunk, i) => ({ noteId, content: chunk.content, embedding: vectors[i] })),
-    );
+    await executor.insert(noteChunks).values(chunks.map((chunk) => ({ noteId, ...chunk })));
   }
 }

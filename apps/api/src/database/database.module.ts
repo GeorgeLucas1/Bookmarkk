@@ -25,7 +25,15 @@ const MIGRATIONS_FOLDER = join(__dirname, '..', '..', 'drizzle');
           'DATABASE_URL',
           'postgres://postgres:postgres@localhost:5432/bookmark',
         );
-        return new Pool({ connectionString });
+        const pool = new Pool({
+          connectionString,
+          // O padrão (10s) fecha conexões ociosas e a próxima requisição paga a reconexão.
+          idleTimeoutMillis: 5 * 60_000,
+          keepAlive: true,
+        });
+        // Sem esse handler, uma conexão ociosa derrubada pelo Postgres encerra o processo.
+        pool.on('error', (error) => new Logger('PgPool').warn(`Idle client error: ${error.message}`));
+        return pool;
       },
     },
     {

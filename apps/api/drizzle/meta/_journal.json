@@ -15,6 +15,13 @@
       "when": 1791513919834,
       "tag": "0001_renomear_para_portugues",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791665052475,
+      "tag": "0002_memoria_e_grafos",
+      "breakpoints": true
     }
   ]
 }

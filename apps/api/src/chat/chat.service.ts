@@ -1,20 +1,13 @@
-import {
-  Inject,
-  Injectable,
-  Logger,
-  ServiceUnavailableException,
-  UnauthorizedException,
-} from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Inject, Injectable } from '@nestjs/common';
 import { cosineDistance, eq, sql } from 'drizzle-orm';
 import { Database, DRIZZLE } from '../database/database.module';
 import { noteChunks } from '../database/schema';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
+import { OpenRouterService } from '../llm/openrouter.service';
+import { MemoryService } from '../memory/memory.service';
 import { NotesService } from '../notes/notes.service';
-import { buildRagMessages, ChatCompletionMessage, ChatHistoryMessage, RetrievedChunk } from './prompt';
+import { buildRagMessages, ChatHistoryMessage, RetrievedChunk } from './prompt';
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_MODEL = 'openai/gpt-oss-120b:free';
 const TOP_K = 5;
 
 export interface ChatSource {
@@ -24,51 +17,72 @@ export interface ChatSource {
 }
 
 export interface ChatStream {
+  /** Conversation the messages were saved to; the client sends it back to continue it. */
+  conversationId: string;
   sources: ChatSource[];
   tokens: AsyncGenerator<string>;
 }
 
 @Injectable()
 export class ChatService {
-  private readonly logger = new Logger(ChatService.name);
-
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly embeddings: EmbeddingsService,
     private readonly notes: NotesService,
-    private readonly config: ConfigService,
+    private readonly memory: MemoryService,
+    private readonly llm: OpenRouterService,
   ) {}
 
   /**
    * Runs the full RAG flow: embed the question, retrieve the most similar
-   * chunks with pgvector, build the prompt, and stream the completion.
+   * chunks and earlier memories with pgvector, build the prompt, and stream
+   * the completion. The exchange is saved and turned into memory afterwards.
    */
-  async ask(noteId: string, message: string, history: ChatHistoryMessage[]): Promise<ChatStream> {
-    const apiKey = this.config.get<string>('OPENROUTER_API_KEY');
-    if (!apiKey) {
-      throw new ServiceUnavailableException(
-        'OPENROUTER_API_KEY is not configured. Set it in the .env file to enable chat.',
-      );
-    }
-
+  async ask(
+    noteId: string,
+    message: string,
+    history: ChatHistoryMessage[],
+    conversationId?: string,
+  ): Promise<ChatStream> {
+    this.llm.assertConfigured();
     const note = await this.notes.findOne(noteId);
+    const conversation = await this.memory.ensureConversation(noteId, conversationId);
 
-    const chunks = await this.retrieveChunks(noteId, message);
-    const messages = buildRagMessages(message, note, chunks, history);
-    const tokens = this.streamCompletion(apiKey, messages);
+    const questionVector = await this.embeddings.embedOne(message);
+    const [chunks, memories] = await Promise.all([
+      this.retrieveChunks(noteId, questionVector),
+      this.memory.findRelevantMemories(noteId, questionVector, conversation),
+    ]);
+    await this.memory.addMessage(conversation, 'user', message);
+    await this.memory.recordRagQuery(noteId, conversation, message, chunks);
+
+    const messages = buildRagMessages(message, note, chunks, history, memories);
 
     return {
+      conversationId: conversation,
       sources: chunks.map((chunk) => ({
         id: chunk.id,
         content: chunk.content,
         similarity: chunk.similarity,
       })),
-      tokens,
+      tokens: this.saveAnswer(conversation, this.llm.stream(messages)),
     };
   }
 
-  private async retrieveChunks(noteId: string, question: string): Promise<RetrievedChunk[]> {
-    const questionVector = await this.embeddings.embedOne(question);
+  /** Passes the tokens through, then stores the full answer and refreshes the memory. */
+  private async *saveAnswer(conversationId: string, tokens: AsyncGenerator<string>): AsyncGenerator<string> {
+    let answer = '';
+    for await (const token of tokens) {
+      answer += token;
+      yield token;
+    }
+    if (answer.trim()) {
+      await this.memory.addMessage(conversationId, 'assistant', answer);
+      this.memory.scheduleUpdate(conversationId);
+    }
+  }
+
+  private async retrieveChunks(noteId: string, questionVector: number[]): Promise<RetrievedChunk[]> {
     const distance = cosineDistance(noteChunks.embedding, questionVector);
     const rows = await this.db
       .select({
@@ -81,63 +95,5 @@ export class ChatService {
       .orderBy(distance)
       .limit(TOP_K);
     return rows;
-  }
-
-  private async *streamCompletion(
-    apiKey: string,
-    messages: ChatCompletionMessage[],
-  ): AsyncGenerator<string> {
-    const model = this.config.get<string>('OPENROUTER_MODEL', DEFAULT_MODEL);
-
-    const response = await fetch(OPENROUTER_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ model, messages, stream: true }),
-    });
-
-    if (response.status === 401 || response.status === 403) {
-      throw new UnauthorizedException('OpenRouter rejected the API key. Check OPENROUTER_API_KEY.');
-    }
-    if (!response.ok || !response.body) {
-      const detail = await response.text().catch(() => '');
-      this.logger.error(`OpenRouter request failed (${response.status}): ${detail}`);
-      throw new ServiceUnavailableException(`OpenRouter request failed with status ${response.status}`);
-    }
-
-    const decoder = new TextDecoder();
-    let buffered = '';
-
-    for await (const value of response.body as unknown as AsyncIterable<Uint8Array>) {
-      buffered += decoder.decode(value, { stream: true });
-
-      let newlineIndex = buffered.indexOf('\n');
-      while (newlineIndex !== -1) {
-        const line = buffered.slice(0, newlineIndex).trim();
-        buffered = buffered.slice(newlineIndex + 1);
-        newlineIndex = buffered.indexOf('\n');
-
-        if (!line.startsWith('data:')) {
-          continue;
-        }
-        const payload = line.slice(5).trim();
-        if (payload === '[DONE]') {
-          return;
-        }
-        try {
-          const parsed = JSON.parse(payload) as {
-            choices?: { delta?: { content?: string } }[];
-          };
-          const delta = parsed.choices?.[0]?.delta?.content;
-          if (delta) {
-            yield delta;
-          }
-        } catch {
-          // Ignore malformed keep-alive lines from the upstream stream.
-        }
-      }
-    }
   }
 }
