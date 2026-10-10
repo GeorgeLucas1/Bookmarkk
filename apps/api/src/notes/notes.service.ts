@@ -1,26 +1,26 @@
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Pool, PoolClient } from 'pg';
-import { PG_POOL } from '../database/database.module';
+import { asc, desc, eq } from 'drizzle-orm';
+import { Database, DRIZZLE } from '../database/database.module';
+import { noteChunks, noteEntries, notes } from '../database/schema';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
-import { toSqlVector } from '../shared/vector';
 import { chunkPages } from './chunking';
 import { NoteType } from './note-types';
 
 export interface NoteEntry {
   id: string;
   content: string;
-  createdAt: string;
+  createdAt: Date;
 }
 
 export interface NoteRecord {
   id: string;
   title: string;
   type: NoteType;
-  /** Text written when the note was created. */
+  /** Texto escrito quando a nota foi criada. */
   content: string;
-  /** Annotations added to the note afterwards, oldest first. */
+  /** Anotações adicionadas depois à nota, da mais antiga para a mais recente. */
   entries: NoteEntry[];
-  createdAt: string;
+  createdAt: Date;
 }
 
 export interface CreateNoteInput {
@@ -29,127 +29,87 @@ export interface CreateNoteInput {
   content: string;
 }
 
-interface NoteRow {
-  id: string;
-  title: string;
-  type: NoteType;
-  content: string;
-  created_at: string;
-  entries: NoteEntry[];
-}
+/** Carrega as entradas junto com a nota, da mais antiga para a mais recente. */
+const WITH_ENTRIES = {
+  entries: {
+    columns: { id: true, content: true, createdAt: true },
+    orderBy: asc(noteEntries.createdAt),
+  },
+} as const;
 
-const SELECT_NOTES = `
-  SELECT n.id, n.title, n.type, n.content, n.created_at,
-    COALESCE(
-      json_agg(
-        json_build_object('id', e.id, 'content', e.content, 'createdAt', e.created_at)
-        ORDER BY e.created_at
-      ) FILTER (WHERE e.id IS NOT NULL),
-      '[]'
-    ) AS entries
-  FROM notes n
-  LEFT JOIN note_entries e ON e.note_id = n.id`;
+/** O banco ou uma transação aberta; os dois aceitam os mesmos inserts. */
+type Executor = Pick<Database, 'insert'>;
 
 @Injectable()
 export class NotesService {
   private readonly logger = new Logger(NotesService.name);
 
   constructor(
-    @Inject(PG_POOL) private readonly pool: Pool,
+    @Inject(DRIZZLE) private readonly db: Database,
     private readonly embeddings: EmbeddingsService,
   ) {}
 
-  /** Saves a note and indexes its text as embedded chunks for chat retrieval. */
+  /** Salva uma nota e indexa o texto dela em chunks com embeddings para a busca do chat. */
   async create(input: CreateNoteInput): Promise<NoteRecord> {
-    let noteId: string;
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      const noteResult = await client.query<{ id: string }>(
-        'INSERT INTO notes (title, type, content) VALUES ($1, $2, $3) RETURNING id',
-        [input.title, input.type, input.content],
-      );
-      noteId = noteResult.rows[0].id;
-      await this.indexText(client, noteId, input.title, input.content);
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    const noteId = await this.db.transaction(async (tx) => {
+      const [note] = await tx
+        .insert(notes)
+        .values({ title: input.title, type: input.type, content: input.content })
+        .returning({ id: notes.id });
+      await this.indexText(tx, note.id, input.title, input.content);
+      return note.id;
+    });
     return this.findOne(noteId);
   }
 
-  /** Appends a new annotation to an existing note and indexes it. */
+  /** Adiciona uma nova anotação a uma nota existente e a indexa. */
   async addEntry(noteId: string, content: string): Promise<NoteRecord> {
     const note = await this.findOne(noteId);
 
-    const client = await this.pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('INSERT INTO note_entries (note_id, content) VALUES ($1, $2)', [
-        noteId,
-        content,
-      ]);
-      await this.indexText(client, noteId, note.title, content);
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    await this.db.transaction(async (tx) => {
+      await tx.insert(noteEntries).values({ noteId, content });
+      await this.indexText(tx, noteId, note.title, content);
+    });
     return this.findOne(noteId);
   }
 
   async findAll(): Promise<NoteRecord[]> {
-    const result = await this.pool.query<NoteRow>(
-      `${SELECT_NOTES} GROUP BY n.id ORDER BY n.created_at DESC`,
-    );
-    return result.rows.map(toRecord);
+    return this.db.query.notes.findMany({
+      with: WITH_ENTRIES,
+      orderBy: [desc(notes.createdAt)],
+    });
   }
 
   async findOne(id: string): Promise<NoteRecord> {
-    const result = await this.pool.query<NoteRow>(`${SELECT_NOTES} WHERE n.id = $1 GROUP BY n.id`, [
-      id,
-    ]);
-    if (result.rowCount === 0) {
+    const note = await this.db.query.notes.findFirst({
+      where: eq(notes.id, id),
+      with: WITH_ENTRIES,
+    });
+    if (!note) {
       throw new NotFoundException(`Note ${id} was not found`);
     }
-    return toRecord(result.rows[0]);
+    return note;
   }
 
   async remove(id: string): Promise<void> {
-    const result = await this.pool.query('DELETE FROM notes WHERE id = $1', [id]);
-    if (result.rowCount === 0) {
+    const deleted = await this.db.delete(notes).where(eq(notes.id, id)).returning({ id: notes.id });
+    if (deleted.length === 0) {
       throw new NotFoundException(`Note ${id} was not found`);
     }
   }
 
-  /** Chunks and embeds text, storing the chunks under the note. */
-  private async indexText(client: PoolClient, noteId: string, title: string, text: string) {
-    // The title is embedded with the body so questions that mention it still match.
+  /** Divide o texto em chunks, gera os embeddings e salva os chunks na nota. */
+  private async indexText(executor: Executor, noteId: string, title: string, text: string) {
+    // O título entra junto com o corpo para que perguntas que o mencionam também encontrem o trecho.
     const chunks = chunkPages([`${title}\n${text}`]);
     this.logger.log(`Embedding ${chunks.length} chunks for note "${title}"`);
+    if (chunks.length === 0) {
+      return;
+    }
     const vectors = await this.embeddings.embed(chunks.map((chunk) => chunk.content));
 
-    for (let i = 0; i < chunks.length; i += 1) {
-      await client.query(
-        'INSERT INTO note_chunks (note_id, content, embedding) VALUES ($1, $2, $3::vector)',
-        [noteId, chunks[i].content, toSqlVector(vectors[i])],
-      );
-    }
+    await executor.insert(noteChunks).values(
+      chunks.map((chunk, i) => ({ noteId, content: chunk.content, embedding: vectors[i] })),
+    );
   }
-}
-
-function toRecord(row: NoteRow): NoteRecord {
-  return {
-    id: row.id,
-    title: row.title,
-    type: row.type,
-    content: row.content,
-    entries: row.entries,
-    createdAt: row.created_at,
-  };
 }
