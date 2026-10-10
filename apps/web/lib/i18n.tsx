@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { NoteType } from './api';
+import type { GraphNodeKind, GraphView } from './memory';
 
 export type Language = 'pt-BR' | 'en-GB';
 
@@ -55,6 +56,25 @@ const translations = {
     match: (percent: string) => `${percent}% de correspondência`,
     dismiss: 'Fechar notificação',
     language: 'Idioma',
+    memory: 'Memória',
+    openMemory: 'Abrir memória',
+    memoryConversations: 'Memória da IA',
+    memoryGraph: 'Grafos de conversa',
+    graphViews: { entities: 'Entidades', rag: 'RAG' } as Record<GraphView, string>,
+    memorySample: 'Prévia com dados de exemplo',
+    messagesCount: (count: number) => (count === 1 ? '1 mensagem' : `${count} mensagens`),
+    graphHint: 'Clique em um nó para ver as conexões.',
+    connectionsOf: (label: string) => `Conexões de ${label}`,
+    graphNodeKinds: {
+      character: 'Personagem',
+      place: 'Lugar',
+      item: 'Item',
+      event: 'Evento',
+      concept: 'Conceito',
+      query: 'Pergunta',
+      chunk: 'Trecho',
+      note: 'Anotação',
+    } as Record<GraphNodeKind, string>,
   },
   'en-GB': {
     appTitle: 'Bookmarkk',
@@ -103,6 +123,25 @@ const translations = {
     match: (percent: string) => `${percent}% match`,
     dismiss: 'Dismiss notification',
     language: 'Language',
+    memory: 'Memory',
+    openMemory: 'Open memory',
+    memoryConversations: 'AI memory',
+    memoryGraph: 'Conversation graphs',
+    graphViews: { entities: 'Entities', rag: 'RAG' } as Record<GraphView, string>,
+    memorySample: 'Preview with sample data',
+    messagesCount: (count: number) => (count === 1 ? '1 message' : `${count} messages`),
+    graphHint: 'Click a node to see its connections.',
+    connectionsOf: (label: string) => `Connections of ${label}`,
+    graphNodeKinds: {
+      character: 'Character',
+      place: 'Place',
+      item: 'Item',
+      event: 'Event',
+      concept: 'Concept',
+      query: 'Question',
+      chunk: 'Chunk',
+      note: 'Note',
+    } as Record<GraphNodeKind, string>,
   },
 };
 
