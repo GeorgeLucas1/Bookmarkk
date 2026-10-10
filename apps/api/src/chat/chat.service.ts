@@ -6,11 +6,11 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Pool } from 'pg';
-import { PG_POOL } from '../database/database.module';
+import { cosineDistance, eq, sql } from 'drizzle-orm';
+import { Database, DRIZZLE } from '../database/database.module';
+import { noteChunks } from '../database/schema';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
 import { NotesService } from '../notes/notes.service';
-import { toSqlVector } from '../shared/vector';
 import { buildRagMessages, ChatCompletionMessage, ChatHistoryMessage, RetrievedChunk } from './prompt';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
@@ -33,7 +33,7 @@ export class ChatService {
   private readonly logger = new Logger(ChatService.name);
 
   constructor(
-    @Inject(PG_POOL) private readonly pool: Pool,
+    @Inject(DRIZZLE) private readonly db: Database,
     private readonly embeddings: EmbeddingsService,
     private readonly notes: NotesService,
     private readonly config: ConfigService,
@@ -69,19 +69,18 @@ export class ChatService {
 
   private async retrieveChunks(noteId: string, question: string): Promise<RetrievedChunk[]> {
     const questionVector = await this.embeddings.embedOne(question);
-    const result = await this.pool.query<{
-      id: string;
-      content: string;
-      similarity: number;
-    }>(
-      `SELECT id, content, 1 - (embedding <=> $1::vector) AS similarity
-       FROM note_chunks
-       WHERE note_id = $2
-       ORDER BY embedding <=> $1::vector
-       LIMIT $3`,
-      [toSqlVector(questionVector), noteId, TOP_K],
-    );
-    return result.rows.map((row) => ({ ...row, similarity: Number(row.similarity) }));
+    const distance = cosineDistance(noteChunks.embedding, questionVector);
+    const rows = await this.db
+      .select({
+        id: noteChunks.id,
+        content: noteChunks.content,
+        similarity: sql<number>`1 - (${distance})`.mapWith(Number),
+      })
+      .from(noteChunks)
+      .where(eq(noteChunks.noteId, noteId))
+      .orderBy(distance)
+      .limit(TOP_K);
+    return rows;
   }
 
   private async *streamCompletion(
