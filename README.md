@@ -165,6 +165,16 @@ Se o Postgres já estiver rodando, basta `npm run dev`.
 | `npm run dev:web` | Inicia só o front (`next dev` em `apps/web`) |
 | `npm run build` | Gera o build das duas aplicações |
 | `npm test` | Roda os testes da API |
+| `npm run db:generate` | Gera uma nova migration do Drizzle a partir de `apps/api/src/database/schema.ts` |
+| `npm run db:studio` | Abre o Drizzle Studio para navegar pelos dados do banco |
+
+### Banco de dados (Drizzle ORM)
+
+A API acessa o PostgreSQL pelo **Drizzle ORM**, que tem suporte nativo ao pgvector (coluna `vector` e `cosineDistance` para a busca por similaridade).
+
+* As tabelas ficam em `apps/api/src/database/schema.ts`.
+* As migrations SQL ficam em `apps/api/drizzle/` e são aplicadas automaticamente quando a API inicia.
+* Para mudar o schema: edite `schema.ts`, rode `npm run db:generate`, revise o SQL gerado e faça commit dele junto com a mudança.
 
 ### Como o `npm run dev` funciona
 
