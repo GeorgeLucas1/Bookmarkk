@@ -237,6 +237,8 @@ npm run dev                       (raiz)
 
 Na prática, é o mesmo que abrir dois terminais e rodar `cd apps/api` + `npm run start:dev` em um e `cd apps/web` + `npm run dev` no outro. O `--workspace` substitui o `cd`, e o `concurrently` substitui os dois terminais.
 
-Por padrão, o front fica em `http://localhost:3001` e a API se conecta ao PostgreSQL na porta `5432`.
+Por padrão, o front fica em `http://localhost:3000`, a API em `http://localhost:3001` e a API se conecta ao PostgreSQL na porta `5432`.
+
+O front não chama a API diretamente: ele faz as requisições para `/api/*` na própria origem, e o Next.js repassa (proxy) para a URL definida em `API_URL` no `.env`. Por isso não é preciso configurar CORS, e o app funciona acessado por `localhost`, `127.0.0.1` ou pelo IP da rede.
 
 > **Dica:** dentro de `apps/api` o script de desenvolvimento se chama `start:dev`, e não `dev`. Para iniciar só a API a partir dessa pasta, use `npm run start:dev`.

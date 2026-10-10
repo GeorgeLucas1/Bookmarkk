@@ -1,4 +1,6 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+// Same-origin path proxied to the NestJS API by next.config.mjs. Set
+// NEXT_PUBLIC_API_URL only to bypass the proxy and call the API directly.
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || '/api').replace(/\/+$/, '');
 
 export const NOTE_TYPES = [
   'game_story',

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChatMessage, ChatPanel } from '../components/ChatPanel';
+import { MemoryDialog } from '../components/MemoryDialog';
 import { NoteDialog } from '../components/NoteDialog';
 import { NotePanel } from '../components/NotePanel';
 import { Toast, ToastMessage } from '../components/Toast';
@@ -19,7 +20,7 @@ export default function HomePage() {
   const [notes, setNotes] = useState<NoteRecord[]>([]);
   const [loadingNotes, setLoadingNotes] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [dialog, setDialog] = useState<'create' | 'entry' | null>(null);
+  const [dialog, setDialog] = useState<'create' | 'entry' | 'memory' | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatBusy, setChatBusy] = useState(false);
@@ -162,6 +163,7 @@ export default function HomePage() {
         onSelect={handleSelect}
         onNew={() => setDialog('create')}
         onDelete={handleDelete}
+        onOpenMemory={() => setDialog('memory')}
       />
       <ChatPanel
         note={selectedNote}
@@ -190,6 +192,7 @@ export default function HomePage() {
           onError={showError}
         />
       )}
+      {dialog === 'memory' && <MemoryDialog onClose={closeDialog} />}
       <Toast toast={toast} onDismiss={() => setToast(null)} />
     </main>
   );
