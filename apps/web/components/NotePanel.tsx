@@ -3,6 +3,7 @@
 import type { NoteRecord } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import { LanguageSwitcher } from './LanguageSwitcher';
+import { BrainIcon } from './MemoryDialog';
 import { NOTE_TYPE_COLORS, NoteTypeIcon } from './NoteTypeIcon';
 
 interface NotePanelProps {
@@ -12,9 +13,18 @@ interface NotePanelProps {
   onSelect: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
+  onOpenMemory: () => void;
 }
 
-export function NotePanel({ notes, loading, selectedId, onSelect, onNew, onDelete }: NotePanelProps) {
+export function NotePanel({
+  notes,
+  loading,
+  selectedId,
+  onSelect,
+  onNew,
+  onDelete,
+  onOpenMemory,
+}: NotePanelProps) {
   const { t, language } = useI18n();
 
   return (
@@ -24,7 +34,18 @@ export function NotePanel({ notes, loading, selectedId, onSelect, onNew, onDelet
           <h1 className="text-sm font-semibold tracking-wide">{t.appTitle}</h1>
           <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">{t.appSubtitle}</p>
         </div>
-        <LanguageSwitcher />
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onOpenMemory}
+            aria-label={t.openMemory}
+            title={t.memory}
+            className="rounded-md p-1 text-zinc-500 transition-colors hover:bg-accent-soft hover:text-accent dark:text-zinc-400 dark:hover:bg-zinc-900 dark:hover:text-indigo-400"
+          >
+            <BrainIcon className="h-5 w-5" />
+          </button>
+          <LanguageSwitcher />
+        </div>
       </div>
 
       <button
