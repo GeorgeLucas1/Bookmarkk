@@ -8,6 +8,10 @@ import { ConfigService } from '@nestjs/config';
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const DEFAULT_MODEL = 'openai/gpt-oss-120b:free';
+/** Generous because reasoning models (like the default) count their thinking against it. */
+const DEFAULT_MAX_TOKENS = 4096;
+/** Covers the whole streamed answer, not just the first byte. */
+const REQUEST_TIMEOUT_MS = 120_000;
 
 export interface ChatCompletionMessage {
   role: 'system' | 'user' | 'assistant';
@@ -86,6 +90,8 @@ export class OpenRouterService {
 
   private async request(messages: ChatCompletionMessage[], stream: boolean): Promise<Response> {
     const model = this.config.get<string>('OPENROUTER_MODEL', DEFAULT_MODEL);
+    // Limits keep one request from running up the bill or hanging forever (unbounded consumption).
+    const maxTokens = Number(this.config.get('LLM_MAX_TOKENS')) || DEFAULT_MAX_TOKENS;
 
     const response = await fetch(OPENROUTER_URL, {
       method: 'POST',
@@ -93,7 +99,8 @@ export class OpenRouterService {
         Authorization: `Bearer ${this.apiKey()}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ model, messages, stream }),
+      body: JSON.stringify({ model, messages, stream, max_tokens: maxTokens }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
     if (response.status === 401 || response.status === 403) {

@@ -2,6 +2,7 @@ import { relations } from 'drizzle-orm';
 import {
   index,
   integer,
+  jsonb,
   pgTable,
   primaryKey,
   real,
@@ -12,6 +13,7 @@ import {
   vector,
 } from 'drizzle-orm/pg-core';
 import type { EntityKind } from '../memory/memory-extraction';
+import type { SecurityEventKind, SecurityEventSource, SecurityAction } from '../security/security-events';
 import { NoteType } from '../notes/note-types';
 
 /**
@@ -192,3 +194,24 @@ export const noteEntriesRelations = relations(noteEntries, ({ one }) => ({
 export const noteChunksRelations = relations(noteChunks, ({ one }) => ({
   note: one(notes, { fields: [noteChunks.noteId], references: [notes.id] }),
 }));
+
+/**
+ * Registro de auditoria das defesas de segurança: mensagens bloqueadas,
+ * trechos com possível injeção indireta, memórias rejeitadas e embeddings
+ * inválidos. A nota é opcional e o evento sobrevive à exclusão dela.
+ */
+export const securityEvents = pgTable(
+  'eventos_seguranca',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    kind: text('tipo').$type<SecurityEventKind>().notNull(),
+    source: text('origem').$type<SecurityEventSource>().notNull(),
+    action: text('acao').$type<SecurityAction>().notNull(),
+    noteId: uuid('nota_id').references(() => notes.id, { onDelete: 'set null' }),
+    score: real('pontuacao').notNull(),
+    rules: jsonb('regras').$type<string[]>().notNull(),
+    excerpt: text('trecho').notNull(),
+    createdAt: timestamp('criado_em', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('idx_eventos_seguranca_criado_em').on(table.createdAt)],
+);
