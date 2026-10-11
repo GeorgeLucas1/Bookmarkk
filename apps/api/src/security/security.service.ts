@@ -233,6 +233,53 @@ export class SecurityService {
     return redacted;
   }
 
+  /**
+   * Valida o relatório do agente analista antes de entregá-lo ao agente de
+   * conversa. O analista lê trechos não confiáveis, então uma injeção
+   * indireta pode sair dele como "fato" (LLM01) ou ele pode repetir o próprio
+   * prompt (LLM07). Fatos com instruções são descartados; um vazamento do
+   * canário descarta o relatório inteiro.
+   */
+  async vetAnalysis<T extends { answerable: boolean; facts: { text: string }[]; gaps: string }>(
+    analysis: T,
+    noteId: string,
+    canary: string,
+  ): Promise<T | null> {
+    const texts = [...analysis.facts.map((f) => f.text), analysis.gaps];
+    if (texts.some((text) => text.includes(canary))) {
+      await this.record({
+        kind: 'prompt_leakage',
+        source: 'agent_analysis',
+        action: 'blocked',
+        noteId,
+        rules: ['system_prompt_echo'],
+        text: texts.join('\n'),
+      });
+      return null;
+    }
+
+    const rejected = texts.filter((text) => this.isSuspicious(text));
+    if (rejected.length === 0) {
+      return analysis;
+    }
+    const scan = scanForInjection(rejected.join('\n'));
+    await this.record({
+      kind: 'prompt_injection',
+      source: 'agent_analysis',
+      action: 'rejected',
+      noteId,
+      scan,
+      text: rejected.join('\n'),
+    });
+    const facts = analysis.facts.filter((f) => !this.isSuspicious(f.text));
+    return {
+      ...analysis,
+      answerable: analysis.answerable && facts.length > 0,
+      facts,
+      gaps: this.isSuspicious(analysis.gaps) ? '' : analysis.gaps,
+    };
+  }
+
   /** Registra o que o filtro de saída removeu da resposta e se ela vazou o prompt de sistema. */
   async recordOutput(noteId: string, findings: OutputFinding[], leaked: boolean, answer: string): Promise<void> {
     if (leaked) {
