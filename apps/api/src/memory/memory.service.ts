@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { and, asc, cosineDistance, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, asc, cosineDistance, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import { Database, DRIZZLE } from '../database/database.module';
 import {
   conversationMessages,
@@ -60,6 +60,9 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const MIN_MEMORY_SIMILARITY = 0.25;
 const RELEVANT_MEMORIES = 3;
 const RAG_GRAPH_QUERIES = 5;
+/** Entities of the note checked for a mention in the question and the chunks. */
+const GRAPH_ENTITY_SCAN = 200;
+const RELATED_RELATIONS = 15;
 
 @Injectable()
 export class MemoryService {
@@ -150,6 +153,42 @@ export class MemoryService {
       .orderBy(distance)
       .limit(RELEVANT_MEMORIES);
     return rows.filter((row) => row.similarity >= MIN_MEMORY_SIMILARITY).map((row) => row.summary);
+  }
+
+  /**
+   * GraphRAG: relations of the entity graph that touch an entity mentioned in
+   * `text` (the question plus the retrieved chunks), as "A -[label]-> B".
+   * Gives the analyst the links between characters, places and events that
+   * no single chunk states.
+   */
+  async findRelatedRelations(noteId: string, text: string): Promise<string[]> {
+    const haystack = entityKey(text);
+    const entities = await this.db
+      .select({ id: memoryEntities.id, name: memoryEntities.name, key: memoryEntities.key })
+      .from(memoryEntities)
+      .where(eq(memoryEntities.noteId, noteId))
+      .limit(GRAPH_ENTITY_SCAN);
+    const mentioned = entities.filter((e) => e.key.length >= 3 && haystack.includes(e.key)).map((e) => e.id);
+    if (mentioned.length === 0) {
+      return [];
+    }
+
+    const edges = await this.db
+      .select({ from: memoryEdges.sourceId, to: memoryEdges.targetId, label: memoryEdges.label })
+      .from(memoryEdges)
+      .where(
+        and(
+          eq(memoryEdges.noteId, noteId),
+          or(inArray(memoryEdges.sourceId, mentioned), inArray(memoryEdges.targetId, mentioned)),
+        ),
+      )
+      .limit(RELATED_RELATIONS);
+    const nameById = new Map(entities.map((e) => [e.id, e.name]));
+    return edges.flatMap((edge) => {
+      const from = nameById.get(edge.from);
+      const to = nameById.get(edge.to);
+      return from && to ? [`${from} -[${edge.label}]-> ${to}`] : [];
+    });
   }
 
   /**

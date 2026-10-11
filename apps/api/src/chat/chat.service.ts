@@ -1,20 +1,24 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { cosineDistance, eq, sql } from 'drizzle-orm';
+import { AnalystAgent } from '../agents/analyst.agent';
+import { ConversationAgent } from '../agents/conversation.agent';
 import { Database, DRIZZLE } from '../database/database.module';
 import { noteChunks } from '../database/schema';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
 import { OpenRouterService } from '../llm/openrouter.service';
 import { MemoryService } from '../memory/memory.service';
 import { NotesService } from '../notes/notes.service';
-import { createCanary, StreamingOutputGuard } from '../security/output-guard';
+import { StreamingOutputGuard } from '../security/output-guard';
 import { dropNearDuplicates } from '../security/retrieval-guard';
 import { SecurityService } from '../security/security.service';
-import { buildRagMessages, RAG_RULES, RetrievedChunk } from './prompt';
+import { RetrievedChunk } from './prompt';
 
 const TOP_K = 5;
 /** Candidatos buscados no pgvector antes de descartar os quase duplicados. */
 const CANDIDATES = TOP_K * 4;
 const MAX_HISTORY_MESSAGES = 10;
+/** Perguntas anteriores que o analista recebe para entender perguntas de continuação. */
+const ANALYST_PREVIOUS_QUESTIONS = 2;
 const LEAK_NOTICE = '\n\n[Resposta interrompida: ela estava expondo as instruções internas do assistente.]';
 
 export interface ChatSource {
@@ -39,12 +43,17 @@ export class ChatService {
     private readonly memory: MemoryService,
     private readonly llm: OpenRouterService,
     private readonly security: SecurityService,
+    private readonly analyst: AnalystAgent,
+    private readonly conversation: ConversationAgent,
   ) {}
 
   /**
-   * Runs the full RAG flow: embed the question, retrieve the most similar
-   * chunks and earlier memories with pgvector, build the prompt, and stream
-   * the completion. The exchange is saved and turned into memory afterwards.
+   * Runs the two-agent RAG flow: embed the question, retrieve the most
+   * similar chunks and earlier memories with pgvector plus the related
+   * relations of the entity graph, let the analyst agent (cheap model) turn
+   * all of it into a short report, and stream the conversation agent's answer
+   * (main model) built from that report. The exchange is saved and turned
+   * into memory afterwards.
    */
   async ask(noteId: string, rawMessage: string, conversationId?: string): Promise<ChatStream> {
     this.llm.assertConfigured();
@@ -64,12 +73,23 @@ export class ChatService {
     await this.memory.addMessage(conversation, 'user', message);
     await this.memory.recordRagQuery(noteId, conversation, message, chunks);
 
-    const canary = createCanary();
-    const messages = await this.security.redactForLlm(
-      buildRagMessages(message, note, chunks, history, memories, canary),
+    const relations = await this.memory.findRelatedRelations(
+      noteId,
+      [message, ...chunks.map((chunk) => chunk.content)].join('\n'),
+    );
+    const previousQuestions = history
+      .filter((m) => m.role === 'user')
+      .slice(-ANALYST_PREVIOUS_QUESTIONS)
+      .map((m) => m.content);
+
+    const analysis = await this.analyst.analyze(
+      { question: message, note, chunks, memories, relations, previousQuestions },
       noteId,
     );
-    const guard = new StreamingOutputGuard(canary, RAG_RULES);
+    const { tokens, guard } = await this.conversation.respond(
+      { question: message, note, history, analysis, chunks, memories },
+      noteId,
+    );
 
     return {
       conversationId: conversation,
@@ -78,7 +98,7 @@ export class ChatService {
         content: chunk.content,
         similarity: chunk.similarity,
       })),
-      tokens: this.guardAndSave(noteId, conversation, this.llm.stream(messages), guard),
+      tokens: this.guardAndSave(noteId, conversation, tokens, guard),
     };
   }
 

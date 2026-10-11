@@ -10,7 +10,7 @@ const INVISIBLE_CHARS =
 const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 
 /** Tags usadas para delimitar dados no prompt; o texto não pode abri-las nem fechá-las. */
-const PROMPT_DELIMITERS = /<\s*(\/?)\s*(trecho|memoria|nota|system|sistema|assistant|user)\b[^>]*>/gi;
+const PROMPT_DELIMITERS = /<\s*(\/?)\s*(trecho|memoria|relacao|analise|pergunta|nota|system|sistema|assistant|user)\b[^>]*>/gi;
 
 export function countInvisibleChars(text: string): number {
   return text.match(INVISIBLE_CHARS)?.length ?? 0;

@@ -101,6 +101,6 @@ export function buildRagMessages(
 }
 
 /** Text that goes inside a data tag: no invisible characters and no tags of its own. */
-function asData(text: string): string {
+export function asData(text: string): string {
   return escapeDelimiters(sanitizeText(text));
 }
