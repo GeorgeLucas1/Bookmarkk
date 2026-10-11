@@ -74,12 +74,13 @@ describe('buildMemoryMessages', () => {
       knownEntities: ['Ranni'],
     });
 
-    expect(system.content).toContain('reuse the exact same name');
+    expect(system.content).toContain('use exatamente o mesmo nome');
     expect(system.content).toContain('Ranni');
-    expect(user.content).toContain('Note title: Elden Ring');
+    expect(user.content).toContain('Título da nota: Elden Ring');
+    expect(user.content).toContain('Tipo da nota: história de jogo');
     expect(user.content).toContain('Mais lore');
-    expect(user.content).toContain('User: Quem é Ranni?');
-    expect(user.content).toContain('Assistant: Uma semideusa.');
+    expect(user.content).toContain('Usuário: Quem é Ranni?');
+    expect(user.content).toContain('Assistente: Uma semideusa.');
   });
 });
 

@@ -15,6 +15,7 @@ import {
 import { EmbeddingsService } from '../embeddings/embeddings.service';
 import { OpenRouterService } from '../llm/openrouter.service';
 import { NotesService } from '../notes/notes.service';
+import { SecurityService } from '../security/security.service';
 import { NoteType } from '../notes/note-types';
 import { buildMemoryMessages, EntityKind, entityKey, parseMemoryExtraction } from './memory-extraction';
 
@@ -71,6 +72,7 @@ export class MemoryService {
     private readonly embeddings: EmbeddingsService,
     private readonly notes: NotesService,
     private readonly llm: OpenRouterService,
+    private readonly security: SecurityService,
   ) {}
 
   /** Returns the conversation to continue, or starts a new one when the id is missing or belongs to another note. */
@@ -97,6 +99,20 @@ export class MemoryService {
       .update(conversations)
       .set({ updatedAt: new Date() })
       .where(eq(conversations.id, conversationId));
+  }
+
+  /**
+   * The latest messages of the conversation, oldest first. The chat uses this
+   * instead of a history sent by the client, which could forge assistant turns.
+   */
+  async recentMessages(conversationId: string, limit: number): Promise<{ role: 'user' | 'assistant'; content: string }[]> {
+    const rows = await this.db
+      .select({ role: conversationMessages.role, content: conversationMessages.content })
+      .from(conversationMessages)
+      .where(eq(conversationMessages.conversationId, conversationId))
+      .orderBy(desc(conversationMessages.createdAt))
+      .limit(limit);
+    return rows.reverse();
   }
 
   /** Saves which chunks pgvector retrieved for a question, for the RAG graph. */
@@ -177,18 +193,36 @@ export class MemoryService {
         .where(eq(memoryEntities.noteId, noteId))
         .limit(100),
     ]);
-    if (messages.length === 0) {
+    // Mensagens que parecem instruções (injeção que passou abaixo do limite de
+    // bloqueio, ou uma resposta que a repetiu) não entram na memória.
+    const trusted = messages.filter((m) => !this.security.isSuspicious(m.content));
+    if (trusted.length === 0) {
       return;
     }
 
     const knownEntities = known.map((e) => e.name);
-    const reply = await this.llm.complete(buildMemoryMessages({ note, messages, knownEntities }));
+    const prompt = await this.security.redactForLlm(
+      buildMemoryMessages({ note, messages: trusted, knownEntities }),
+      noteId,
+    );
+    const reply = await this.llm.complete(prompt);
     const extraction = parseMemoryExtraction(reply, knownEntities);
     if (!extraction) {
       this.logger.warn(`Model reply for conversation ${conversationId} had no usable memory`);
       return;
     }
-    const embedding = await this.embeddings.embedOne(extraction.summary);
+    if (!(await this.security.vetMemory(extraction, noteId))) {
+      return;
+    }
+
+    const userText = trusted
+      .filter((m) => m.role === 'user')
+      .map((m) => m.content)
+      .join('\n');
+    const [embedding, conversationVector] = await this.embeddings.embed([extraction.summary, userText]);
+    if (!(await this.security.checkMemoryGrounding(noteId, extraction.summary, embedding, conversationVector))) {
+      return;
+    }
 
     await this.db.transaction(async (tx) => {
       const values = {

@@ -5,6 +5,7 @@ import { EmbeddingsModule } from './embeddings/embeddings.module';
 import { NotesModule } from './notes/notes.module';
 import { ChatModule } from './chat/chat.module';
 import { MemoryModule } from './memory/memory.module';
+import { SecurityModule } from './security/security.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { MemoryModule } from './memory/memory.module';
     NotesModule,
     ChatModule,
     MemoryModule,
+    SecurityModule,
   ],
 })
 export class AppModule {}

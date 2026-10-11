@@ -8,7 +8,9 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  UseGuards,
 } from '@nestjs/common';
+import { LlmRateLimitGuard } from '../security/rate-limit.guard';
 import { isNoteType, NOTE_TYPES } from './note-types';
 import { NoteRecord, NotesService } from './notes.service';
 
@@ -26,6 +28,7 @@ export class NotesController {
   constructor(private readonly notesService: NotesService) {}
 
   @Post()
+  @UseGuards(LlmRateLimitGuard)
   create(@Body() body: CreateNoteBody): Promise<NoteRecord> {
     const title = typeof body.title === 'string' ? body.title.trim() : '';
     const content = typeof body.content === 'string' ? body.content.trim() : '';
@@ -50,6 +53,7 @@ export class NotesController {
   }
 
   @Post(':id/entries')
+  @UseGuards(LlmRateLimitGuard)
   addEntry(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { content?: unknown },

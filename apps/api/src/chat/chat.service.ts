@@ -6,9 +6,16 @@ import { EmbeddingsService } from '../embeddings/embeddings.service';
 import { OpenRouterService } from '../llm/openrouter.service';
 import { MemoryService } from '../memory/memory.service';
 import { NotesService } from '../notes/notes.service';
-import { buildRagMessages, ChatHistoryMessage, RetrievedChunk } from './prompt';
+import { createCanary, StreamingOutputGuard } from '../security/output-guard';
+import { dropNearDuplicates } from '../security/retrieval-guard';
+import { SecurityService } from '../security/security.service';
+import { buildRagMessages, RAG_RULES, RetrievedChunk } from './prompt';
 
 const TOP_K = 5;
+/** Candidatos buscados no pgvector antes de descartar os quase duplicados. */
+const CANDIDATES = TOP_K * 4;
+const MAX_HISTORY_MESSAGES = 10;
+const LEAK_NOTICE = '\n\n[Resposta interrompida: ela estava expondo as instruções internas do assistente.]';
 
 export interface ChatSource {
   id: string;
@@ -31,6 +38,7 @@ export class ChatService {
     private readonly notes: NotesService,
     private readonly memory: MemoryService,
     private readonly llm: OpenRouterService,
+    private readonly security: SecurityService,
   ) {}
 
   /**
@@ -38,25 +46,30 @@ export class ChatService {
    * chunks and earlier memories with pgvector, build the prompt, and stream
    * the completion. The exchange is saved and turned into memory afterwards.
    */
-  async ask(
-    noteId: string,
-    message: string,
-    history: ChatHistoryMessage[],
-    conversationId?: string,
-  ): Promise<ChatStream> {
+  async ask(noteId: string, rawMessage: string, conversationId?: string): Promise<ChatStream> {
     this.llm.assertConfigured();
     const note = await this.notes.findOne(noteId);
+    // Bloqueia injeção direta antes de gravar ou gastar qualquer coisa com a mensagem.
+    const message = await this.security.inspectUserMessage(rawMessage, noteId);
     const conversation = await this.memory.ensureConversation(noteId, conversationId);
 
+    // O histórico vem do banco, não do cliente, que poderia forjar falas do assistente.
+    const history = await this.memory.recentMessages(conversation, MAX_HISTORY_MESSAGES);
     const questionVector = await this.embeddings.embedOne(message);
-    const [chunks, memories] = await Promise.all([
+    const [retrieved, memories] = await Promise.all([
       this.retrieveChunks(noteId, questionVector),
       this.memory.findRelevantMemories(noteId, questionVector, conversation),
     ]);
+    const chunks = retrieved.map((chunk) => ({ ...chunk, suspicious: this.security.isSuspicious(chunk.content) }));
     await this.memory.addMessage(conversation, 'user', message);
     await this.memory.recordRagQuery(noteId, conversation, message, chunks);
 
-    const messages = buildRagMessages(message, note, chunks, history, memories);
+    const canary = createCanary();
+    const messages = await this.security.redactForLlm(
+      buildRagMessages(message, note, chunks, history, memories, canary),
+      noteId,
+    );
+    const guard = new StreamingOutputGuard(canary, RAG_RULES);
 
     return {
       conversationId: conversation,
@@ -65,19 +78,45 @@ export class ChatService {
         content: chunk.content,
         similarity: chunk.similarity,
       })),
-      tokens: this.saveAnswer(conversation, this.llm.stream(messages)),
+      tokens: this.guardAndSave(noteId, conversation, this.llm.stream(messages), guard),
     };
   }
 
-  /** Passes the tokens through, then stores the full answer and refreshes the memory. */
-  private async *saveAnswer(conversationId: string, tokens: AsyncGenerator<string>): AsyncGenerator<string> {
-    let answer = '';
-    for await (const token of tokens) {
-      answer += token;
-      yield token;
+  /**
+   * Passes the tokens through the output guard, then stores what the user
+   * actually saw and refreshes the memory. A leaked answer is cut off and
+   * never reaches the history or the memory.
+   */
+  private async *guardAndSave(
+    noteId: string,
+    conversationId: string,
+    tokens: AsyncGenerator<string>,
+    guard: StreamingOutputGuard,
+  ): AsyncGenerator<string> {
+    let raw = '';
+    let shown = '';
+    try {
+      for await (const token of tokens) {
+        raw += token;
+        const safe = guard.push(token);
+        if (guard.leaked) break;
+        if (safe) {
+          shown += safe;
+          yield safe;
+        }
+      }
+      const rest = guard.flush();
+      if (rest) {
+        shown += rest;
+        yield rest;
+      }
+      if (guard.leaked) yield LEAK_NOTICE;
+    } finally {
+      await this.security.recordOutput(noteId, [...guard.findings], guard.leaked, raw);
     }
-    if (answer.trim()) {
-      await this.memory.addMessage(conversationId, 'assistant', answer);
+
+    if (shown.trim() && !guard.leaked) {
+      await this.memory.addMessage(conversationId, 'assistant', shown);
       this.memory.scheduleUpdate(conversationId);
     }
   }
@@ -88,12 +127,14 @@ export class ChatService {
       .select({
         id: noteChunks.id,
         content: noteChunks.content,
+        embedding: noteChunks.embedding,
         similarity: sql<number>`1 - (${distance})`.mapWith(Number),
       })
       .from(noteChunks)
       .where(eq(noteChunks.noteId, noteId))
       .orderBy(distance)
-      .limit(TOP_K);
-    return rows;
+      .limit(CANDIDATES);
+    // Um texto repetido muitas vezes na nota não pode ocupar todas as vagas do prompt.
+    return dropNearDuplicates(rows, TOP_K).map(({ embedding: _embedding, ...chunk }) => chunk);
   }
 }
