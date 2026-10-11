@@ -3,6 +3,7 @@ import { asc, desc, eq } from 'drizzle-orm';
 import { Database, DRIZZLE } from '../database/database.module';
 import { noteChunks, noteEntries, notes } from '../database/schema';
 import { EmbeddingsService } from '../embeddings/embeddings.service';
+import { InspectedText, SecurityService } from '../security/security.service';
 import { chunkPages } from './chunking';
 import { NoteType } from './note-types';
 
@@ -52,31 +53,34 @@ export class NotesService {
   constructor(
     @Inject(DRIZZLE) private readonly db: Database,
     private readonly embeddings: EmbeddingsService,
+    private readonly security: SecurityService,
   ) {}
 
   /** Salva uma nota e indexa o texto dela em chunks com embeddings para a busca do chat. */
   async create(input: CreateNoteInput): Promise<NoteRecord> {
-    const chunks = await this.embedText(input.title, input.content);
+    const indexed = await this.embedText(input.title, input.content);
     const noteId = await this.db.transaction(async (tx) => {
       const [note] = await tx
         .insert(notes)
         .values({ title: input.title, type: input.type, content: input.content })
         .returning({ id: notes.id });
-      await this.saveChunks(tx, note.id, chunks);
+      await this.saveChunks(tx, note.id, indexed.chunks);
       return note.id;
     });
+    await this.audit(noteId, indexed, input.content);
     return this.findOne(noteId);
   }
 
   /** Adiciona uma nova anotação a uma nota existente e a indexa. */
   async addEntry(noteId: string, content: string): Promise<NoteRecord> {
     const note = await this.findOne(noteId);
-    const chunks = await this.embedText(note.title, content);
+    const indexed = await this.embedText(note.title, content);
 
     await this.db.transaction(async (tx) => {
       await tx.insert(noteEntries).values({ noteId, content });
-      await this.saveChunks(tx, noteId, chunks);
+      await this.saveChunks(tx, noteId, indexed.chunks);
     });
+    await this.audit(noteId, indexed, content);
     return this.findOne(noteId);
   }
 
@@ -108,13 +112,40 @@ export class NotesService {
   /**
    * Divide o texto em chunks e gera os embeddings. Roda fora da transação para
    * não segurar uma conexão do banco enquanto o modelo calcula os vetores.
+   * Os chunks são salvos já sem caracteres invisíveis, porque é deles que sai
+   * o texto colocado no prompt do chat.
    */
-  private async embedText(title: string, text: string): Promise<EmbeddedChunk[]> {
+  private async embedText(
+    title: string,
+    text: string,
+  ): Promise<{ chunks: EmbeddedChunk[]; inspected: InspectedText }> {
+    const inspected = this.security.inspect(`${title}\n${text}`);
     // O título entra junto com o corpo para que perguntas que o mencionam também encontrem o trecho.
-    const chunks = chunkPages([`${title}\n${text}`]);
+    const chunks = chunkPages([inspected.text]);
     this.logger.log(`Embedding ${chunks.length} chunks for note "${title}"`);
     const vectors = await this.embeddings.embed(chunks.map((chunk) => chunk.content));
-    return chunks.map((chunk, i) => ({ content: chunk.content, embedding: vectors[i] }));
+    return {
+      chunks: chunks.map((chunk, i) => ({ content: chunk.content, embedding: vectors[i] })),
+      inspected,
+    };
+  }
+
+  /**
+   * Depois de salvar: registra instruções escondidas no texto (injeção
+   * indireta) e trechos repetidos para dominar a busca vetorial. A nota é do
+   * usuário, então nada aqui bloqueia o salvamento.
+   */
+  private async audit(
+    noteId: string,
+    indexed: { chunks: EmbeddedChunk[]; inspected: InspectedText },
+    original: string,
+  ): Promise<void> {
+    await this.security.recordSuspiciousContent(noteId, indexed.inspected, original);
+    await this.security.checkEmbeddingFlood(
+      noteId,
+      indexed.chunks.map((chunk) => chunk.embedding),
+      indexed.chunks.map((chunk) => chunk.content),
+    );
   }
 
   /** Salva os chunks já com embeddings na nota. */

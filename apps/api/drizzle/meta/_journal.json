@@ -22,6 +22,13 @@
       "when": 1791665052475,
       "tag": "0002_memoria_e_grafos",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791676891168,
+      "tag": "0003_eventos_seguranca",
+      "breakpoints": true
     }
   ]
 }
