@@ -64,7 +64,7 @@ export const INJECTION_RULES: InjectionRule[] = [
     'delimiter_escape',
     'Tenta abrir ou fechar as tags que delimitam dados no prompt',
     0.6,
-    /<\s*\/?\s*(trecho|memoria|nota|system|sistema)\b[^>]*>/iu,
+    /<\s*\/?\s*(trecho|memoria|relacao|analise|pergunta|nota|system|sistema)\b[^>]*>/iu,
   ),
   regexRule(
     'jailbreak',

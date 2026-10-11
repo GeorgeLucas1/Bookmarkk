@@ -13,6 +13,12 @@ const DEFAULT_MAX_TOKENS = 4096;
 /** Covers the whole streamed answer, not just the first byte. */
 const REQUEST_TIMEOUT_MS = 120_000;
 
+/** Overrides per call, so each agent can run on its own (cheaper or stronger) model. */
+export interface CompletionOptions {
+  model?: string;
+  maxTokens?: number;
+}
+
 export interface ChatCompletionMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
@@ -31,15 +37,15 @@ export class OpenRouterService {
   }
 
   /** Returns the whole completion at once. */
-  async complete(messages: ChatCompletionMessage[]): Promise<string> {
-    const response = await this.request(messages, false);
+  async complete(messages: ChatCompletionMessage[], options: CompletionOptions = {}): Promise<string> {
+    const response = await this.request(messages, false, options);
     const body = (await response.json()) as { choices?: { message?: { content?: string } }[] };
     return body.choices?.[0]?.message?.content ?? '';
   }
 
   /** Streams the completion token by token. */
-  async *stream(messages: ChatCompletionMessage[]): AsyncGenerator<string> {
-    const response = await this.request(messages, true);
+  async *stream(messages: ChatCompletionMessage[], options: CompletionOptions = {}): AsyncGenerator<string> {
+    const response = await this.request(messages, true, options);
     if (!response.body) {
       throw new ServiceUnavailableException('OpenRouter returned an empty stream');
     }
@@ -88,10 +94,14 @@ export class OpenRouterService {
     return apiKey;
   }
 
-  private async request(messages: ChatCompletionMessage[], stream: boolean): Promise<Response> {
-    const model = this.config.get<string>('OPENROUTER_MODEL', DEFAULT_MODEL);
+  private async request(
+    messages: ChatCompletionMessage[],
+    stream: boolean,
+    options: CompletionOptions,
+  ): Promise<Response> {
+    const model = options.model || this.config.get<string>('OPENROUTER_MODEL', DEFAULT_MODEL);
     // Limits keep one request from running up the bill or hanging forever (unbounded consumption).
-    const maxTokens = Number(this.config.get('LLM_MAX_TOKENS')) || DEFAULT_MAX_TOKENS;
+    const maxTokens = options.maxTokens || Number(this.config.get('LLM_MAX_TOKENS')) || DEFAULT_MAX_TOKENS;
 
     const response = await fetch(OPENROUTER_URL, {
       method: 'POST',

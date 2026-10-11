@@ -15,6 +15,8 @@ export type SecurityEventSource =
   | 'memory'
   | 'llm_request'
   | 'llm_output'
+  /** Resposta do agente analista, antes de chegar ao agente de conversa. */
+  | 'agent_analysis'
   | 'retrieval'
   | 'http';
 
